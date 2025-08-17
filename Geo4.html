@@ -1,0 +1,386 @@
+<!DOCTYPE html><html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RanoFocus • PQWT‑M100 – Profil type Oasis (Full)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <!-- lib légère pour GeoTIFF (facultatif, utilisée pour l'export) -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.min.js"></script>
+  <style>
+    :root{ --h: 680px; }
+    body{padding:18px;background:#f6f7fb}
+    #plot{height:var(--h);width:100%;background:#fff;border-radius:16px;box-shadow:0 6px 24px rgba(19,23,31,.08)}
+    .toolbar{position:sticky;top:0;z-index:5;background:#f6f7fbd9;backdrop-filter:saturate(1.1) blur(6px);border-radius:14px;padding:8px 12px;}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+    .pill{border-radius:999px}
+    .small-note{font-size:.9rem;color:#6b7280}
+    .cardlite{background:#fff;border-radius:16px;border:1px solid #eef0f4;box-shadow:0 4px 18px rgba(20,23,31,.06)}
+  </style>
+</head>
+<body>
+<div class="container-xxl">
+  <h2 class="mb-2">🌍 RanoFocus – <span class="text-primary">PQWT‑M100</span> • Gridding & Profil type Oasis (FULL)</h2>
+  <p class="small-note mb-3">Importez un fichier <span class="mono">X Y Z</span> (CSV/XYZ/TXT) ou un tableau (CSV → XYZ). L'axe Y = profondeur (m, positif vers le bas). Le rendu imite Oasis/Surfer : palette PQWT, lissage gaussien, ticks 0/−50/−100 m, ligne de station & auto‑pick forage.</p>  <!-- Toolbar -->  <div class="toolbar mb-3 border border-light shadow-sm">
+    <div class="row g-2 align-items-end">
+      <div class="col-lg-4">
+        <label class="form-label">Fichier .CSV/.XYZ/.TXT</label>
+        <input type="file" id="fileInput" accept=".csv,.xyz,.txt" class="form-control" />
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label">Résolution grille</label>
+        <div class="input-group">
+          <input id="nx" type="number" class="form-control" value="160" min="40" step="10" />
+          <span class="input-group-text">×</span>
+          <input id="ny" type="number" class="form-control" value="160" min="40" step="10" />
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label">Lissage σ (px)</label>
+        <input id="sigma" type="number" class="form-control" value="1.6" min="0" step="0.2" />
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label">k voisins IDW</label>
+        <input id="kneighbors" type="number" class="form-control" value="20" min="4" step="2" />
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label">Puissance IDW</label>
+        <input id="power" type="number" class="form-control" value="2" min="1" step="0.5" />
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label">Seuil masque (Z)</label>
+        <input id="zmask" type="number" class="form-control" value="" placeholder="auto" />
+      </div>
+      <div class="col-12 d-flex flex-wrap gap-2 mt-2">
+        <button id="btnOriginal" class="btn btn-outline-secondary pill">📊 Grille originale</button>
+        <button id="btnProcess" class="btn btn-success pill">🌈 Profil Process (IDW + lissage)</button>
+        <button id="btnAutoPick" class="btn btn-primary pill">🎯 Suggestion forage</button>
+        <button id="btnShowStd" class="btn btn-outline-primary pill">± Incertitude</button>
+        <button id="btnExportPNG" class="btn btn-outline-dark pill">🖼️ Export PNG</button>
+        <button id="btnExportXYZ" class="btn btn-outline-dark pill">⬇️ Export XYZ</button>
+        <button id="btnExportGRD" class="btn btn-outline-dark pill">⬇️ Export Surfer GRD</button>
+        <button id="btnExportGTiff" class="btn btn-outline-dark pill">⬇️ Export GeoTIFF</button>
+        <button id="btnConvert" class="btn btn-outline-secondary pill">↔️ Convertir CSV → XYZ</button>
+      </div>
+    </div>
+  </div>  <div id="plot" class="border"></div>  <div class="row mt-3 g-3">
+    <div class="col-lg-6">
+      <div class="p-3 cardlite">
+        <h6 class="mb-2">Résumé données</h6>
+        <div id="stats" class="small-note"></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="p-3 cardlite">
+        <h6 class="mb-2">Station & profil (clic sur la carte)</h6>
+        <div id="pickInfo" class="small-note">Cliquez dans le profil pour tracer la ligne verticale blanche. Courbe profondeur ↔ résistivité affichée ci‑dessous.</div>
+        <div id="mini" style="height:220px"></div>
+      </div>
+    </div>
+  </div>
+</div><script>
+// ========= Utilitaires =========
+function detectDelimiter(sample){
+  const candidates=[",",";","\t"," "]; let best=",",max=-1;
+  for(const d of candidates){ const n=(sample.match(new RegExp(d===' ' ? " \\s+" : "\\"+d,'g'))||[]).length; if(n>max){max=n; best=d} }
+  return best;
+}
+function parseCSV(text){
+  const lines=text.trim().split(/\r?\n/).filter(l=>l.trim().length>0);
+  if(lines.length===0) return [];
+  const del=detectDelimiter(lines.slice(0,20).join("\n"));
+  const data=[];
+  for(const raw of lines){
+    const parts=raw.trim().split(del).map(s=>s.trim()).filter(Boolean);
+    const nums=parts.map(v=>Number(v.replace(',','.')));
+    if(nums.filter(v=>!Number.isNaN(v)).length<3) continue;
+    const [x,y,z]=nums;
+    if([x,y,z].some(v=>Number.isNaN(v))) continue;
+    data.push({x,y,z});
+  }
+  return data;
+}
+function uniqueSorted(a){return [...new Set(a)].sort((x,y)=>x-y)}
+function quantile(arr,q){ const a=[...arr].sort((x,y)=>x-y); const p=(a.length-1)*q; const b=Math.floor(p); const r=p-b; return a[b]+(a[b+1]!==undefined?r*(a[b+1]-a[b]):0); }
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+
+// ========= Conversion CSV (table) → XYZ =========
+function tryConvertMatrixCSV(text){
+  const lines=text.trim().split(/\r?\n/).filter(Boolean);
+  const del=detectDelimiter(lines.slice(0,20).join("\n"));
+  let rows=[];
+  for(const L of lines){
+    const tokens=L.split(del).map(s=>Number(s.trim().replace(',','.')));
+    if(tokens.some(v=>Number.isNaN(v))) continue;
+    rows.push(tokens);
+  }
+  if(rows.length<2 || rows[0].length<4) return null;
+  const xyz=[];
+  const ny=rows.length, nx=rows[0].length-1;
+  for(let j=0;j<ny;j++){
+    const y=rows[j][0];
+    for(let i=1;i<rows[j].length;i++){
+      const x=i; // station index
+      const z=rows[j][i];
+      xyz.push({x,y,z});
+    }
+  }
+  return xyz;
+}
+
+// ========= Gridding =========
+function gridOriginal(data){
+  const xs=uniqueSorted(data.map(d=>d.x));
+  const ys=uniqueSorted(data.map(d=>d.y));
+  const xIndex=new Map(xs.map((v,i)=>[v,i]));
+  const yIndex=new Map(ys.map((v,i)=>[v,i]));
+  const grid=Array.from({length:ys.length},()=>Array(xs.length).fill(null));
+  for(const d of data){ grid[yIndex.get(d.y)][xIndex.get(d.x)]=d.z; }
+  return {xs,ys,grid, meta:{xMin:xs[0],xMax:xs.at(-1),yMin:ys[0],yMax:ys.at(-1)}}
+}
+
+function buildBuckets(data, ncell=28){
+  const xs=data.map(d=>d.x), ys=data.map(d=>d.y);
+  const xMin=Math.min(...xs), xMax=Math.max(...xs); const yMin=Math.min(...ys), yMax=Math.max(...ys);
+  const buckets=Array.from({length:ncell*ncell},()=>[]);
+  const idx=(x,y)=>{ const i=clamp(Math.floor((x-xMin)/(xMax-xMin)*ncell),0,ncell-1); const j=clamp(Math.floor((y-yMin)/(yMax-yMin)*ncell),0,ncell-1); return j*ncell+i; };
+  data.forEach((p,i)=>buckets[idx(p.x,p.y)].push(i));
+  return {buckets,ncell,xMin,xMax,yMin,yMax};
+}
+function neighbors(indexer, data, x0,y0, k){
+  const {buckets,ncell,xMin,xMax,yMin,yMax}=indexer;
+  const i=clamp(Math.floor((x0-xMin)/(xMax-xMin)*ncell),0,ncell-1);
+  const j=clamp(Math.floor((y0-yMin)/(yMax-yMin)*ncell),0,ncell-1);
+  const pick=[]; let r=0;
+  while(pick.length<k && r<ncell){
+    for(let jj=Math.max(0,j-r); jj<=Math.min(ncell-1,j+r); jj++){
+      for(let ii=Math.max(0,i-r); ii<=Math.min(ncell-1,i+r); ii++){
+        buckets[jj*ncell+ii].forEach(idx=>pick.push(idx));
+      }
+    }
+    r++;
+  }
+  pick.sort((ia,ib)=>{const a=data[ia], b=data[ib]; return (a.x-x0)**2+(a.y-y0)**2 - ((b.x-x0)**2+(b.y-y0)**2);});
+  return pick.slice(0,k);
+}
+function idwGrid(data, nx=160, ny=160, power=2, k=20){
+  const xs=data.map(d=>d.x), ys=data.map(d=>d.y);
+  const xMin=Math.min(...xs), xMax=Math.max(...xs);
+  const yMin=Math.min(...ys), yMax=Math.max(...ys);
+  const xi=Array.from({length:nx},(_,i)=>xMin+(xMax-xMin)*i/(nx-1));
+  const yi=Array.from({length:ny},(_,j)=>yMin+(yMax-yMin)*j/(ny-1));
+  const idx=buildBuckets(data, 30);
+  const grid=new Array(ny); const wsum=new Array(ny);
+  for(let j=0;j<ny;j++){ grid[j]=new Array(nx); wsum[j]=new Array(nx); }
+  for(let j=0;j<ny;j++){
+    for(let i=0;i<nx;i++){
+      const x0=xi[i], y0=yi[j];
+      const neigh=neighbors(idx,data,x0,y0,k);
+      let num=0, den=0; let exact=null;
+      for(const id of neigh){ const p=data[id]; const d=Math.hypot(x0-p.x, y0-p.y); if(d===0){exact=p.z; break;} const w=1/Math.pow(d, power); num+=w*p.z; den+=w; }
+      grid[j][i]= exact!==null ? exact : (num/den);
+      wsum[j][i]=den;
+    }
+  }
+  return {xs:xi, ys:yi, grid, weight:wsum, meta:{xMin,xMax,yMin,yMax}};
+}
+
+// ========= Lissage gaussien =========
+function gaussianKernel1D(sigma){ const r=Math.max(1, Math.ceil(sigma*3)); const k=[]; let s=0; for(let i=-r;i<=r;i++){ const v=Math.exp(-(i*i)/(2*sigma*sigma)); k.push(v); s+=v; } return k.map(v=>v/s); }
+function convolve1D(grid, kernel, axis='x'){
+  const ny=grid.length, nx=grid[0].length; const r=(kernel.length-1)/2|0; const out=Array.from({length:ny},()=>Array(nx));
+  if(axis==='x'){
+    for(let j=0;j<ny;j++){ for(let i=0;i<nx;i++){ let acc=0; for(let kk=-r; kk<=r; kk++){ const ii=Math.min(nx-1, Math.max(0, i+kk)); acc+=grid[j][ii]*kernel[kk+r]; } out[j][i]=acc; } }
+  } else {
+    for(let j=0;j<ny;j++){ for(let i=0;i<nx;i++){ let acc=0; for(let kk=-r; kk<=r; kk++){ const jj=Math.min(ny-1, Math.max(0, j+kk)); acc+=grid[jj][i]*kernel[kk+r]; } out[j][i]=acc; } }
+  }
+  return out;
+}
+function gaussianSmooth(grid, sigma){ if(!sigma || sigma<=0) return grid; const k=gaussianKernel1D(sigma); return convolve1D(convolve1D(grid,k,'x'),k,'y'); }
+
+// ========= Couleurs =========
+const PQWT_COLORSCALE = [
+  [0.00,"#0b2a8f"],[0.10,"#0062ff"],[0.20,"#00a9ff"],[0.30,"#00e0ff"],[0.40,"#1bf1a5"],
+  [0.50,"#b7f14a"],[0.60,"#ffd400"],[0.70,"#ff8a00"],[0.80,"#ff3d00"],[0.90,"#ff00a8"],[1.00,"#ff7ade"]
+];
+
+// ========= État global =========
+let RAW=[]; // points {x,y,z}
+let CURRENT={xs:[],ys:[],grid:[],weight:[],meta:{}};
+let pickX=null; // station choisie
+let showStd=false;
+
+function showStats(data){
+  if(!data || data.length===0){document.getElementById('stats').innerText='';return}
+  const xs=data.map(d=>d.x), ys=data.map(d=>d.y), zs=data.map(d=>d.z);
+  const zmin=Math.min(...zs), zmax=Math.max(...zs), zq5=quantile(zs,0.05), zq95=quantile(zs,0.95);
+  document.getElementById('stats').innerHTML=
+    `N=${data.length} • X:[${Math.min(...xs).toFixed(2)}—${Math.max(...xs).toFixed(2)}] `+
+    `• Y:[${Math.min(...ys).toFixed(2)}—${Math.max(...ys).toFixed(2)}] `+
+    `• Z:[${zmin.toFixed(2)}—${zmax.toFixed(2)}] • Z 5–95%:[${zq5.toFixed(2)}—${zq95.toFixed(2)}]`;
+}
+
+function applyMask(grid, thresh){
+  if(!thresh && thresh!==0) return grid;
+  const ny=grid.length, nx=grid[0].length; const out=Array.from({length:ny},()=>Array(nx));
+  for(let j=0;j<ny;j++){ for(let i=0;i<nx;i++){ out[j][i] = (grid[j][i]>thresh)? NaN : grid[j][i]; }}
+  return out;
+}
+
+function plotContour(xs, ys, grid, title){
+  const zmaskStr=document.getElementById('zmask').value.trim();
+  let masked=grid;
+  if(zmaskStr!==""){
+    const th=parseFloat(zmaskStr); if(!Number.isNaN(th)) masked=applyMask(grid, th);
+  }
+
+  CURRENT.xs=xs; CURRENT.ys=ys; CURRENT.grid=masked;
+  const flat=masked.flat().filter(v=>!Number.isNaN(v));
+  const vmin=quantile(flat,0.05), vmax=quantile(flat,0.95);
+  const xticks=[1,5,7,10].filter(v=>v>=xs[0] && v<=xs.at(-1));
+  const yMin=Math.min(...ys), yMax=Math.max(...ys);
+  const yticks=[0,-50,-100].filter(v=>v>=Math.min(yMin,yMax) && v<=Math.max(yMin,yMax));
+
+  const trace={ x: xs, y: ys, z: masked, type:'contour', contours:{coloring:'heatmap', ncontours:28}, colorscale:PQWT_COLORSCALE, zmin:vmin, zmax:vmax, colorbar:{title:'Résistivité (Ω·m)'} };
+  const shapes=[];
+  if(pickX!==null){ shapes.push({type:'line', x0:pickX, x1:pickX, y0:Math.min(...ys), y1:Math.max(...ys), line:{color:'#ffffff',width:2}}); }
+  for(const ymark of [-50,-100]){ if(ymark>=Math.min(yMin,yMax) && ymark<=Math.max(yMin,yMax)){ shapes.push({type:'line', x0:xs.at(-1), x1:xs.at(-1)+0.0001, y0:ymark, y1:ymark, line:{color:'#111',width:1}}); } }
+
+  const data=[trace];
+  if(showStd && CURRENT.weight.length){
+    const invw=CURRENT.weight.map(row=>row.map(v=>1/Math.sqrt(v)));
+    data.push({x:xs,y:ys,z:invw,type:'contour',colorscale:[[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.32)']],showscale:false,contours:{showlines:false}});
+  }
+
+  const layout={
+    title:{text:title}, margin:{l:60,r:50,b:45,t:40},
+    xaxis:{title:'Point de mesure (X)', zeroline:false, showgrid:false, tickvals:xticks, ticktext:xticks.map(String)},
+    yaxis:{title:'Profondeur (m)', autorange:'reversed', zeroline:false, showgrid:false, tickvals:yticks}, shapes
+  };
+  Plotly.newPlot('plot',data,layout,{displaylogo:false,responsive:true});
+
+  const plot=document.getElementById('plot');
+  plot.on('plotly_click', ev=>{ if(!ev || !ev.points || ev.points.length===0) return; pickX = ev.points[0].x; drawPickAndMini(); });
+}
+
+function drawPickAndMini(){
+  if(!CURRENT.xs.length) return;
+  const shapes=[{type:'line', x0:pickX, x1:pickX, y0:Math.min(...CURRENT.ys), y1:Math.max(...CURRENT.ys), line:{color:'#ffffff',width:2}}];
+  Plotly.relayout('plot', {shapes});
+  let iClosest=0, minDist=Infinity; CURRENT.xs.forEach((x,i)=>{ const d=Math.abs(x-pickX); if(d<minDist){minDist=d;iClosest=i}});
+  const y=CURRENT.ys; const z=y.map((_,j)=>CURRENT.grid[j][iClosest]);
+  const valid = z.map((v,i)=>({y:y[i], z:v})).filter(o=>!Number.isNaN(o.z));
+  document.getElementById('pickInfo').innerText = `Station X≈${pickX.toFixed(2)} • Z(min)=${Math.min(...valid.map(o=>o.z)).toFixed(2)} Ω·m`;
+  Plotly.newPlot('mini',[{x:valid.map(o=>o.z), y:valid.map(o=>o.y), type:'scatter', mode:'lines+markers', line:{shape:'spline'}}], {height:210, margin:{l:50,r:10,b:40,t:10}, xaxis:{title:'Résistivité (Ω·m)'}, yaxis:{title:'Profondeur (m)', autorange:'reversed'}},{displaylogo:false,responsive:true});
+}
+
+// ========= Export =========
+function download(filename, text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text], {type:'text/plain'})); a.download=filename; a.click(); }
+function exportPNG(){ Plotly.toImage('plot',{format:'png', height:760, width:1300}).then(url=>{ const a=document.createElement('a'); a.href=url; a.download='ranofocus_profil.png'; a.click(); }); }
+function exportXYZ(){
+  if(!CURRENT.xs.length) return alert('Aucune grille.');
+  let lines=['X,Y,Z'];
+  for(let j=0;j<CURRENT.ys.length;j++){
+    for(let i=0;i<CURRENT.xs.length;i++){
+      const z=CURRENT.grid[j][i]; if(Number.isNaN(z)) continue;
+      lines.push(`${CURRENT.xs[i]},${CURRENT.ys[j]},${z}`);
+    }
+  }
+  download('ranofocus_grid.xyz', lines.join('\n'));
+}
+function exportSurferGRD(){
+  if(!CURRENT.xs.length) return alert('Aucune grille.');
+  const nx=CURRENT.xs.length, ny=CURRENT.ys.length;
+  const xlo=CURRENT.xs[0], xhi=CURRENT.xs.at(-1); const ylo=CURRENT.ys[0], yhi=CURRENT.ys.at(-1);
+  const flat=CURRENT.grid.flat().filter(v=>!Number.isNaN(v));
+  const zmin=Math.min(...flat), zmax=Math.max(...flat);
+  let txt='DSAA\n';
+  txt+=`${nx} ${ny}\n`;
+  txt+=`${xlo} ${xhi}\n`;
+  txt+=`${ylo} ${yhi}\n`;
+  txt+=`${zmin} ${zmax}\n`;
+  for(let j=0;j<ny;j++) txt+=CURRENT.grid[j].map(v=>Number.isNaN(v)?-9999:v).join(' ')+'\n';
+  download('ranofocus_grid.grd', txt);
+}
+async function exportGeoTIFF(){
+  if(!CURRENT.xs.length) return alert('Aucune grille.');
+  const nx=CURRENT.xs.length, ny=CURRENT.ys.length;
+  const flat=new Float32Array(ny*nx);
+  let k=0; for(let j=0;j<ny;j++){ for(let i=0;i<nx;i++){ let v=CURRENT.grid[j][i]; if(Number.isNaN(v)) v=-9999; flat[k++]=v; }}
+  const xMin=CURRENT.xs[0], xMax=CURRENT.xs.at(-1); const yMin=CURRENT.ys[0], yMax=CURRENT.ys.at(-1);
+  const dx=(xMax-xMin)/(nx-1), dy=(yMax-yMin)/(ny-1);
+  // GeoTIFF minimal sans projection exacte (à affiner selon besoin)
+  const arrayBuffer = await GeoTIFF.writeArrayBuffer({
+    littleEndian:true,width:nx,height:ny,samplesPerPixel:1,bitsPerSample:32,sampleFormat:3,
+    values:[flat]
+  });
+  const blob=new Blob([arrayBuffer], {type:'image/tiff'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ranofocus_grid.tif'; a.click();
+}
+
+// ========= Pipeline =========
+let lastMode='original';
+function runOriginal(){
+  if(RAW.length===0) return alert('Veuillez d\'abord importer un fichier valide.');
+  const {xs,ys,grid,meta}=gridOriginal(RAW);
+  CURRENT.meta=meta; CURRENT.weight=[]; lastMode='original';
+  plotContour(xs,ys,grid,'Profil Original (points mesurés)');
+}
+function runProcess(){
+  if(RAW.length===0) return alert('Veuillez d\'abord importer un fichier valide.');
+  const nx = parseInt(document.getElementById('nx').value,10)||160;
+  const ny = parseInt(document.getElementById('ny').value,10)||160;
+  const k  = parseInt(document.getElementById('kneighbors').value,10)||20;
+  const p  = parseFloat(document.getElementById('power').value)||2;
+  const sg = parseFloat(document.getElementById('sigma').value)||0;
+  let {xs,ys,grid,weight,meta}=idwGrid(RAW, nx, ny, p, k);
+  if(sg>0){ grid=gaussianSmooth(grid, sg); }
+  CURRENT.meta=meta; CURRENT.weight=weight; lastMode='process';
+  plotContour(xs,ys,grid,'Profil Process (IDW + lissage)');
+}
+function autoPick(){
+  if(!CURRENT.xs.length){ return alert('Affichez d\'abord un profil.'); }
+  const j0=CURRENT.ys.findIndex(v=>v>=10); const j1=CURRENT.ys.findIndex(v=>v>=80);
+  let bestI=0, bestScore=Infinity;
+  for(let i=0;i<CURRENT.xs.length;i++){
+    let s=0, n=0; for(let j=Math.max(0,j0); j<=Math.min(CURRENT.ys.length-1, j1<0?CURRENT.ys.length-1:j1); j++){ const val=CURRENT.grid[j][i]; if(!Number.isNaN(val)){ s+=val; n++; }}
+    const score=s/(n||1); if(score<bestScore){bestScore=score; bestI=i;}
+  }
+  pickX=CURRENT.xs[bestI]; drawPickAndMini();
+}
+
+// ========= Events =========
+const fileInput=document.getElementById('fileInput');
+fileInput.addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const text=ev.target.result;
+    let parsed=parseCSV(text);
+    if(parsed.length===0){
+      const converted=tryConvertMatrixCSV(text);
+      if(converted){ parsed=converted; alert('↔️ Conversion CSV→XYZ automatique appliquée.');}
+    }
+    RAW=parsed;
+    if(RAW.length===0){ alert('⚠️ Fichier illisible. Vérifiez le format.'); return; }
+    showStats(RAW); pickX=null; alert(`✅ ${RAW.length} points chargés.`);
+  };
+  reader.readAsText(f);
+});
+
+
+// Boutons
+ document.getElementById('btnOriginal').addEventListener('click', runOriginal);
+ document.getElementById('btnProcess').addEventListener('click', runProcess);
+ document.getElementById('btnAutoPick').addEventListener('click', autoPick);
+ document.getElementById('btnShowStd').addEventListener('click', ()=>{ showStd=!showStd; if(lastMode==='process') runProcess(); else runOriginal(); });
+ document.getElementById('btnExportPNG').addEventListener('click', exportPNG);
+ document.getElementById('btnExportXYZ').addEventListener('click', exportXYZ);
+ document.getElementById('btnExportGRD').addEventListener('click', exportSurferGRD);
+ document.getElementById('btnExportGTiff').addEventListener('click', exportGeoTIFF);
+ document.getElementById('btnConvert').addEventListener('click', ()=>{
+   const f=fileInput.files && fileInput.files[0]; if(!f) return alert('Choisissez d\'abord un CSV.');
+   const reader=new FileReader(); reader.onload=ev=>{ const xyz=tryConvertMatrixCSV(ev.target.result); if(!xyz){alert('Ce CSV ne ressemble pas à un tableau stations×profondeurs.'); return;} RAW=xyz; showStats(RAW); alert('✅ Conversion réussie. Cliquez sur "Profil Process".'); }; reader.readAsText(f);
+ });
+</script></body>
+</html>
